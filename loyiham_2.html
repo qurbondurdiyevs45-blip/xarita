@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Mini Xarita Ilovasi</title>
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css" />
+  <style>
+    :root {
+      --primary: #4285F4;
+      --bg: #ffffff;
+      --text: #202124;
+      --shadow: 0 4px 12px rgba(0,0,0,0.2);
+      --radius: 14px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    body, html { width: 100%; height: 100%; overflow: hidden; background: #f5f5f5; }
+    
+    #map { width: 100%; height: 100%; z-index: 1; }
+
+    /* UI Panel */
+    .ui-panel {
+      position: absolute;
+      top: 16px; left: 12px; right: 12px;
+      z-index: 1000;
+      background: var(--bg);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 10px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .ui-panel input {
+      flex: 1;
+      min-width: 120px;
+      padding: 12px 14px;
+      border: 1px solid #dadce0;
+      border-radius: 10px;
+      font-size: 15px;
+      outline: none;
+    }
+    .ui-panel input:focus { border-color: var(--primary); }
+    .ui-btn {
+      padding: 12px;
+      background: var(--primary);
+      color: white;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: 600;
+      min-width: 44px;
+      display: flex; align-items: center; justify-content: center;
+      transition: 0.2s;
+    }
+    .ui-btn:hover { opacity: 0.9; }
+    .ui-btn.secondary { background: #f1f3f4; color: var(--text); }
+    
+    /* Route Panel */
+    #route-panel {
+      position: absolute;
+      bottom: 20px; left: 12px; right: 12px;
+      z-index: 1000;
+      background: var(--bg);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 14px;
+      transform: translateY(120%);
+      transition: transform 0.3s cubic-bezier(0.4,0,0.2,1);
+    }
+    #route-panel.active { transform: translateY(0); }
+    #route-panel input { width: 100%; margin-bottom: 10px; padding: 12px; border: 1px solid #dadce0; border-radius: 10px; font-size: 15px; }
+    #route-panel .row { display: flex; gap: 8px; }
+    #route-panel button { flex: 1; padding: 12px; background: var(--primary); color: white; border: none; border-radius: 10px; font-weight: 600; }
+
+    /* Info Toast */
+    #toast {
+      position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%);
+      background: #323232; color: white; padding: 10px 16px; border-radius: 8px;
+      z-index: 2000; opacity: 0; transition: opacity 0.3s; pointer-events: none;
+      font-size: 14px; text-align: center; max-width: 90%;
+    }
+    #toast.show { opacity: 1; }
+
+    /* Leaflet custom overrides */
+    .leaflet-control-zoom { display: none; } /* We use custom zoom if needed, but default is fine on mobile */
+    .leaflet-routing-container { max-height: 40vh; overflow-y: auto; background: white; padding: 10px; border-radius: 10px; box-shadow: var(--shadow); }
+    @media (max-width: 600px) {
+      .leaflet-routing-container { width: calc(100% - 24px); left: 12px !important; right: 12px !important; }
+    }
+  </style>
+</head>
+<body>
+
+  <div id="map"></div>
+
+  <div class="ui-panel">
+    <input type="text" id="search-input" placeholder="Manzil yoki joy qidirish...">
+    <button class="ui-btn" id="search-btn">🔍</button>
+    <button class="ui-btn secondary" id="locate-btn">📍 Joyim</button>
+    <button class="ui-btn secondary" id="route-toggle">🚗 Yo'nalish</button>
+    <select id="layer-select" style="padding: 10px; border-radius: 10px; border: 1px solid #dadce0; background: white;">
+      <option value="street">🗺️ Ko'cha</option>
+      <option value="satellite">🛰️ Sun'iy yo'ldosh</option>
+    </select>
+  </div>
+
+  <div id="route-panel">
+    <input type="text" id="route-start" placeholder="Boshlanish nuqtasi">
+    <input type="text" id="route-end" placeholder="Borish joyi">
+    <div class="row">
+      <button id="build-route">Yo'nalish qurish</button>
+      <button class="ui-btn secondary" id="clear-route" style="background: #ff4d4d;">Bekor qilish</button>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.js"></script>
+
+  <script>
+    // 1. Xarita yaratish
+    const map = L.map('map', { zoomControl: false }).setView([41.3111, 69.2797], 12); // Toshkent
+    L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+    // Qatlamlar
+    const streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap',
+      maxZoom: 19
+    }).addTo(map);
+
+    const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      attribution: '© Esri',
+      maxZoom: 18
+    });
+
+    const layerControl = L.control.layers({ "Ko'cha": streetLayer, "Sun'iy yo'ldosh": satelliteLayer }).addTo(map);
+
+    // 2. Qidirish (Nominatim API)
+    async function searchPlace(query) {
+      if (!query) return showToast("Iltimos, manzil kiriting");
+      showToast("Qidirilmoqda...");
+      try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1`);
+        const data = await res.json();
+        if (data.length === 0) return showToast("Joy topilmadi");
+        
+        const { lat, lon, display_name } = data[0];
+        map.setView([lat, lon], 15);
+        L.marker([lat, lon]).addTo(map).bindPopup(display_name).openPopup();
+        showToast("Joy topildi ✅");
+      } catch (e) {
+        showToast("Xatolik yuz berdi. Internetni tekshiring.");
+      }
+    }
+
+    document.getElementById('search-btn').onclick = () => searchPlace(document.getElementById('search-input').value);
+    document.getElementById('search-input').addEventListener('keypress', e => { if(e.key==='Enter') searchPlace(e.target.value) });
+
+    // 3. Mening joyim (Geolocation)
+    document.getElementById('locate-btn').onclick = () => {
+      if (!navigator.geolocation) return showToast("Brauzeringiz geolokatsiyani qo'llab-quvvatlamaydi");
+      showToast("Joy aniqlanmoqda...");
+      navigator.geolocation.getCurrentPosition(pos => {
+        const { latitude, longitude } = pos.coords;
+        map.setView([latitude, longitude], 16);
+        L.marker([latitude, longitude], {
+          icon: L.divIcon({ className: 'pulse-marker', html: '<div style="width:16px;height:16px;background:#4285F4;border:3px solid white;border-radius:50%;box-shadow:0 0 8px rgba(0,0,0,0.4);"></div>' })
+        }).addTo(map).bindPopup("Siz shu yerda").openPopup();
+        showToast("Joy aniqlandi ✅");
+      }, err => showToast("Joyga ruxsat berilmadi yoki signal yo'q"), { enableHighAccuracy: true });
+    };
+
+    // 4. Yo'nalish (Routing)
+    let routingControl = null;
+    const routePanel = document.getElementById('route-panel');
+    document.getElementById('route-toggle').onclick = () => routePanel.classList.toggle('active');
+
+    async function geocodeRoute(input) {
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(input)}&limit=1`);
+      const data = await res.json();
+      return data.length ? [data[0].lat, data[0].lon] : null;
+    }
+
+    document.getElementById('build-route').onclick = async () => {
+      const start = document.getElementById('route-start').value;
+      const end = document.getElementById('route-end').value;
+      if (!start || !end) return showToast("Ikkala manzilni ham kiriting");
+
+      showToast("Yo'nalish qurilmoqda...");
+      const startCoords = await geocodeRoute(start);
+      const endCoords = await geocodeRoute(end);
+
+      if (!startCoords || !endCoords) return showToast("Manzillar topilmadi");
+
+      if (routingControl) map.removeControl(routingControl);
+      
+      routingControl = L.Routing.control({
+        waypoints: [L.latLng(startCoords[0], startCoords[1]), L.latLng(endCoords[0], endCoords[1])],
+        routeWhileDragging: true,
+        addWaypoints: false,
+        createMarker: () => null,
+        lineOptions: { styles: [{ color: '#4285F4', weight: 6, opacity: 0.8 }] },
+        show: true,
+        language: 'uz'
+      }).addTo(map);
+      
+      routePanel.classList.remove('active');
+      showToast("Yo'nalish tayyor 🚗");
+    };
+
+    document.getElementById('clear-route').onclick = () => {
+      if (routingControl) { map.removeControl(routingControl); routingControl = null; }
+      routePanel.classList.remove('active');
+      showToast("Yo'nalish o'chirildi");
+    };
+
+    // 5. Qatlam almashtirish
+    document.getElementById('layer-select').onchange = (e) => {
+      map.eachLayer(layer => {
+        if (layer !== streetLayer && layer !== satelliteLayer) return;
+        map.removeLayer(layer);
+      });
+      if (e.target.value === 'street') map.addLayer(streetLayer);
+      else map.addLayer(satelliteLayer);
+    };
+
+    // Toast funksiyasi
+    function showToast(msg) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 2500);
+    }
+
+    // Xarita bosilganda koordinata ko'rsatish
+    map.on('click', e => {
+      L.popup().setLatLng(e.latlng).setContent(`📍 ${e.latlng.lat.toFixed(5)}, ${e.latlng.lng.toFixed(5)}`).openOn(map);
+    });
+  </script>
+</body>
+</html>
